@@ -15,8 +15,12 @@ from queue import Queue
 from threading import Thread
 from scipy.spatial import cKDTree
 import json
+from threading import Event
+# Load a model
+# model = YOLO('yolov8x.pt')
 
-# Load the YOLOv8 model (using a lighter model)
+
+
 model = YOLO("best.pt")
 model.to('cuda').half()  # Use half precision for faster inference
 
@@ -35,10 +39,17 @@ tracker_args = IterableSimpleNamespace(**tracker_args)
 
 # Define the directory containing the videos
 # video_dir = "D:\\Sowmesh\\Test_Vids"  # Update to your directory
-# video_dir = "D:\\Sowmesh\\Vids"
-video_dir = "D:\\Sowmesh\\new_vids\\test_vids"
+video_dir = "D:\\Sowmesh\\Test_Vids" 
 video_files = [os.path.join(video_dir, f) for f in os.listdir(video_dir) if f.endswith(('.mp4', '.avi', '.mkv'))]
 
+processing_done = Event() 
+
+def train_model():
+    # model = YOLO('C:\\\Users\\aimlc\\OneDrive\\Desktop\\Sowmesh\\MulitpleObjectTracking\\models\\runs\\detect\\train14\\weights\\last.pt')
+    # model = YOLO('C:\\Users\\aimlc\\OneDrive\\Desktop\\Sowmesh\\MulitpleObjectTracking\\models\\runs\\detect\\train11\\weights\\last.pt')
+    model_to_train = YOLO("yolov8x.pt") 
+    # Train the model
+    results = model_to_train.train(data="D:\\Sowmesh\\licence_plate_rec_dataset\\license_plate_rec\\data.yaml", epochs=10, batch=32, imgsz=640,workers = 16)
 
 # Function to read frames from the video
 def frame_reader(cap, raw_frame_queue, frame_skip, batch_size):
@@ -147,6 +158,8 @@ def display_frames(tracking_queue):
     while True:
         batch_results = tracking_queue.get()
         if batch_results is None:
+            
+            processing_done.set()
             break
     
         for results in batch_results:
@@ -217,6 +230,8 @@ def track_hist_func(tracking_queue, track_hist_dict, prev_positions):
                         ]]
 
 # Loop over each video file in the directory
+# Loop over each video file in the directory
+
 for video_path in video_files:
     print(f"Processing {video_path}...")
 
@@ -274,7 +289,7 @@ for video_path in video_files:
     cv2.destroyAllWindows()
 
     # Save the tracking history to a JSON file
-    json_save_dir = "D:\\Sowmesh\\new_vids\\json_saves_new"
+    json_save_dir = "D:\\Sowmesh\\json_save_3"
     output_file_path = json_save_dir + "\\" + file_name_to_save + ".json"
     with open(output_file_path, 'w') as json_file:
         json.dump(track_hist_dict, json_file, indent=4)
@@ -285,5 +300,11 @@ for video_path in video_files:
     print(f"Processing time: {processing_time:.2f} seconds")
     print(f"Average FPS: {int(total_frames / processing_time)}")
     print(f"Track history saved to {output_file_path}")
+    
+    processing_done.wait()  # Wait until all threads signal completion
+    processing_done.clear()  # Reset for next video if needed
 
+# Call the training function after all videos have been processed
 print("All videos processed.")
+print("Training YOLO model for licence plate detection...")
+train_model()
