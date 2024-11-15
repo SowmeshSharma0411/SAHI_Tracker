@@ -18,7 +18,8 @@ from threading import Thread
 model = YOLO("best.pt")
 model.to('cuda').half()  # Use half precision for faster inference
 
-model_footpath = YOLO("C:\\Users\\aimlc\\OneDrive\\Desktop\\Sowmesh\\footpath_seg_framework\\footpath_seg_trained\\train4\\weights\\best.pt")
+model_footpath = YOLO("C:\\Users\\aimlc\\OneDrive\\Desktop\\Sowmesh\\footpath_seg_framework\\footpath_seg_trained\\train4\\weights\\footpath_best.pt")
+# Video path
 video_path = "C:\\Users\\aimlc\\OneDrive\\Desktop\\Sowmesh\\footpath_seg_framework\\vlc-record-2024-09-23-10h50m15s-D05_20240325070810.mp4-.mp4"
 cap = cv2.VideoCapture(video_path)
 
@@ -28,6 +29,7 @@ max_frames = 10
 # Initialize a mask for intersection
 intersection_mask = None
 
+# Process the video frames to generate the intersection mask
 while cap.isOpened() and frame_count < max_frames:
     ret, frame = cap.read()
     if not ret:
@@ -40,37 +42,43 @@ while cap.isOpened() and frame_count < max_frames:
     masks = results[0].masks
 
     if masks is not None:
-        # Combine masks into a single binary mask
-        combined_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        # Loop over all masks (objects detected)
         for mask in masks.data:
             # Resize the mask to match the frame size
             mask_resized = cv2.resize(mask.cpu().numpy(), (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
-            combined_mask = np.maximum(combined_mask, mask_resized)
-
-        # Convert to binary
-        binary_mask = (combined_mask > 0).astype(np.uint8) * 255
-        
-        # Save the binary mask
-        mask_filename = f"binary_mask_frame_{frame_count + 1}.png"
-        cv2.imwrite(mask_filename, binary_mask)
-        print(f"Saved: {mask_filename}")
-        
-        # Update intersection mask
-        if intersection_mask is None:
-            intersection_mask = binary_mask.copy()
-        else:
-            intersection_mask = cv2.bitwise_and(intersection_mask, binary_mask)
+            
+            # Convert the mask to a binary mask: values greater than 0 are set to 255 (white), others set to 0 (black)
+            binary_mask = (mask_resized > 0).astype(np.uint8) * 255
+            
+            # Save the binary mask (it will only have the detected object in white, and the rest will be black)
+            mask_filename = f"binary_mask_frame_{frame_count + 1}.png"
+            cv2.imwrite(mask_filename, binary_mask)
+            print(f"Saved: {mask_filename}")
+            
+            # Update intersection mask (if required)
+            if intersection_mask is None:
+                intersection_mask = binary_mask.copy()
+            else:
+                intersection_mask = cv2.bitwise_and(intersection_mask, binary_mask)
 
     frame_count += 1
 
-# After processing all frames, save the intersection mask
+# After processing all frames, save the intersection mask (if it exists)
 if intersection_mask is not None:
-    intersection_filename = "intersection_mask.png"
-    cv2.imwrite(intersection_filename, intersection_mask)
+    # Resize the intersection mask to 640x360
+    resized_intersection_mask = cv2.resize(intersection_mask, (640, 360), interpolation=cv2.INTER_NEAREST)
+    
+    # Save the resized intersection mask
+    intersection_filename = "intersection_mask_resized.png"
+    cv2.imwrite(intersection_filename, resized_intersection_mask)
     print(f"Saved: {intersection_filename}")
 
 # Release the video capture object
 cap.release()
+
+# Load the intersection mask
+mask_path = "intersection_mask_resized.png"
+mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)  # Read as grayscale
 
 # Load the SAHI detection model
 detection_model = AutoDetectionModel.from_pretrained(
@@ -86,7 +94,6 @@ tracker_args = yaml_load(tracker_config_path)
 tracker_args = IterableSimpleNamespace(**tracker_args)
 
 # Open the video file
-video_path = "C:\\Users\\aimlc\\Downloads\\videoplayback (3).mp4"
 cap = cv2.VideoCapture(video_path)
 
 # Get video properties
@@ -94,18 +101,18 @@ width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 fps = int(cap.get(cv2.CAP_PROP_FPS))
 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-print(fps, total_frames)
+print(f"FPS: {fps}, Total Frames: {total_frames}")
+
 # Initialize the BYTEtrack tracker with configuration
 tracker = BYTETracker(tracker_args, frame_rate=fps)
 
 # Measure the time taken for processing
 start_time = time.time()
 
-
 frame_count = 0
 frame_skip = 2  # Increase frame skip to process every 3rd frame
-#batch_size = 32  # Increase batch size to process more frames at once
-batch_size = 32
+batch_size = 32  # Process 32 frames in a batch
+
 # Create queues for frame processing pipeline
 raw_frame_queue = Queue(maxsize=120)  # Increase queue size
 detection_queue = Queue(maxsize=80)
@@ -124,9 +131,7 @@ def frame_reader():
             if not success:
                 break
             frame_count += 1
-            resized_frame = cv2.resize(frame, (640, 360), interpolation=cv2.INTER_AREA) #(640, 360) - 34 (1037, 583) - 23 (960, 540) - 29
-            # # Reduce resolution
-            #resized_frame = cv2.resize(frame, (1280, 720), interpolation=cv2.INTER_AREA)
+            resized_frame = cv2.resize(frame, (640, 360), interpolation=cv2.INTER_AREA)  # Resize to 640x360
             batch_frames.append(resized_frame)
         if batch_frames:
             raw_frame_queue.put(batch_frames)
@@ -147,9 +152,9 @@ def sahi_detector():
             sliced_results = get_sliced_prediction(
                 image=frame,
                 detection_model=detection_model,
-                slice_height=240,  # Reduce slice size  #288 #240
-                slice_width=320,    #512 #320
-                overlap_height_ratio=0.25,  # Reduce overlap
+                slice_height=240,  # Reduce slice size
+                slice_width=320,
+                overlap_height_ratio=0.25,
                 overlap_width_ratio=0.25
             )
             
@@ -219,12 +224,31 @@ while True:
         break
     
     for results in batch_results:
-        # Uncomment the following lines if you want to visualize the results
+        for result in results:
+            # Get bounding box details: xywhn are normalized (0-1 range)
+            xywhn = result.boxes.xywhn  # xywhn = [x_center, y_center, width, height] (normalized)
+        
+            for box in xywhn:
+                # Convert normalized coordinates to pixel values (assuming image size is 640x360)
+                x_center, y_center, width, height = box.tolist()
+                x_center = int(x_center * 640)  # Rescale to 640px width
+                y_center = int(y_center * 360)  # Rescale to 360px height
+
+                # Check if the center of the bounding box lies in the white region of the intersection_mask
+                if mask[y_center, x_center] == 255:  # White region in mask
+                    # If inside the white region, change the class name to 'footpath riding'
+                    result.names[result.cls] = 'footpath riding'  # Assuming 'cls' refers to class ID
+                    print(f"Object at ({x_center}, {y_center}) is in the white region. Class changed to 'footpath riding'.")
+        
+        # Plot the updated frame (with modified class names)
         plotted_frame = results.plot()
+
+        # Show the frame with updated class names
         cv2.imshow('Tracked Objects', plotted_frame)
+
+        # Check for 'q' key press to break the loop
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        #pass  # Remove this line if you uncomment the visualization code
 
 # Wait for all threads to complete
 frame_reader_thread.join()
@@ -239,5 +263,4 @@ cv2.destroyAllWindows()
 end_time = time.time()
 processing_time = end_time - start_time
 print(f"Processing time: {processing_time:.2f} seconds")
-#print(f"Frames processed: {frame_count}")
 print(f"Average FPS:", int(total_frames / processing_time))
