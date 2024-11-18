@@ -24,9 +24,12 @@ acci_model = YOLO("our_accident_best.pt")
 # yolo_model = YOLO("yolov8x.pt")
 yolo_model = YOLO("best_yolo.pt")
 
+footpath_model = YOLO("C:\\Users\\aimlc\\OneDrive\\Desktop\\Sowmesh\\footpath_seg_framework\\footpath_seg_trained\\train4\\weights\\footpath_best.pt")
+
 detection_model = AutoDetectionModel.from_pretrained(
     model_type="yolov8",
     model_path="best_yolo.pt",
+    # model_path="yolov8x.pt",
     confidence_threshold=0.05,
     device="cuda"
 )
@@ -70,6 +73,8 @@ hit_and_run_cases = {}
 
 # log_file = "/content/MultipleObjectTracking_Ultralytics/HitNRun/Logs/output.txt"
 log_file = "Logs/output.txt"
+
+mask = None
 
 def log_hit_and_run(message):
     """Log hit-and-run-related messages to a text file."""
@@ -169,9 +174,6 @@ def evaluate_hit_and_run_cases():
         for f in range(frame_count, -1, -1):
             if f in track_history and participant_id in track_history[f]:
                 class_idx = track_history[f][participant_id][4]
-                if participant_id == 31:
-                  log_hit_and_run("This class :")
-                  log_hit_and_run(str(class_idx))
                 break
         if class_idx is not None and class_idx == 0:
             continue  # Skip person class
@@ -322,6 +324,43 @@ def run_object_tracking(frame, frame_count, annotated_frame, tracker):
 
     return annotated_frame
 
+def generate_intersection_mask(cap, max_frames=900):
+    intersection_mask = None
+    frame_count = 0
+    
+    while cap.isOpened() and frame_count < max_frames:
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        results = footpath_model(frame)
+        if results is None:
+            continue
+        masks = results[0].masks
+        
+        if masks is not None:
+            for mask in masks.data:
+                mask_resized = cv2.resize(
+                    mask.cpu().numpy(),
+                    (frame.shape[1], frame.shape[0]),
+                    interpolation=cv2.INTER_NEAREST
+                )
+                binary_mask = (mask_resized > 0).astype(np.uint8) * 255
+                
+                if intersection_mask is None:
+                    intersection_mask = binary_mask.copy()
+                else:
+                    intersection_mask = cv2.bitwise_and(intersection_mask, binary_mask)
+                    
+        frame_count += 1
+        
+    if intersection_mask is not None:
+        mask = cv2.resize(intersection_mask, (640, 360), interpolation=cv2.INTER_NEAREST)
+        cv2.imwrite("intersection_mask_resized.png", mask)
+        print("Saved: intersection_mask_resized.png")
+        
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Reset video to start
+
 # def run_object_tracking(frame, frame_count, annotated_frame):
 #     # Run YOLO model for object tracking
 #     results = yolo_model.track(frame, device=device, persist=True, tracker=tracker, conf=0.05)
@@ -360,40 +399,43 @@ def run_object_tracking(frame, frame_count, annotated_frame, tracker):
 #     else:
 #         log_hit_and_run(f"No objects detected in frame {frame_count}")
 
+# Generate intersection mask
+print("Generating intersection mask...")
+generate_intersection_mask(cap)
 
 # Main processing loop
-while cap.isOpened():
-    success, frame = cap.read()
-    if success:
-        # Create a copy of the frame for annotation
-        annotated_frame = frame.copy()
+# while cap.isOpened():
+#     success, frame = cap.read()
+#     if success:
+#         # Create a copy of the frame for annotation
+#         annotated_frame = frame.copy()
 
-        # Run object tracking (YOLO) on the frame
-        # run_object_tracking(frame, frame_count, annotated_frame)
-        annotated_frame = run_object_tracking(frame, frame_count, annotated_frame, tracker)
+#         # Run object tracking (YOLO) on the frame
+#         # run_object_tracking(frame, frame_count, annotated_frame)
+#         annotated_frame = run_object_tracking(frame, frame_count, annotated_frame, tracker)
 
-        # Run accident detection on the frame
-        run_accident_detection(frame, frame_count, annotated_frame)
+#         # Run accident detection on the frame
+#         run_accident_detection(frame, frame_count, annotated_frame)
        
-        # Display the annotated frame with both accident and object tracking
-        # cv2_imshow(annotated_frame)
-        cv2.imshow("Accident and Object Tracking", annotated_frame)
+#         # Display the annotated frame with both accident and object tracking
+#         # cv2_imshow(annotated_frame)
+#         cv2.imshow("Accident and Object Tracking", annotated_frame)
 
-        # Save the annotated frame to the output video
-        out.write(annotated_frame)
+#         # Save the annotated frame to the output video
+#         out.write(annotated_frame)
        
-        frame_count += 1
+#         frame_count += 1
        
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-    else:
-        break
+#         if cv2.waitKey(1) & 0xFF == ord("q"):
+#             break
+#     else:
+#         break
 
-cap.release()
-out.release()
-cv2.destroyAllWindows()
+# cap.release()
+# out.release()
+# cv2.destroyAllWindows()
 
-evaluate_hit_and_run_cases()
+# evaluate_hit_and_run_cases()
 
 # Display the accident participants results
 # print("Accidents and their participants:")

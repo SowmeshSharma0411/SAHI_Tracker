@@ -81,7 +81,9 @@ class FootpathDetectionSystem:
             if not ret:
                 break
                 
-            results = self.model_footpath(frame)
+            results = self.model_footpath.predict(frame, conf = 0.1)
+            if results is None:
+                continue
             masks = results[0].masks
             
             if masks is not None:
@@ -288,7 +290,8 @@ def main():
     # Configuration
     MODEL_PATH = "best.pt"
     FOOTPATH_MODEL_PATH = "C:\\Users\\aimlc\\OneDrive\\Desktop\\Sowmesh\\footpath_seg_framework\\footpath_seg_trained\\train4\\weights\\footpath_best.pt"
-    VIDEO_PATH = "C:\\Users\\aimlc\\OneDrive\\Desktop\\Sowmesh\\footpath_seg_framework\\vlc-record-2024-09-23-10h50m15s-D05_20240325070810.mp4-.mp4"
+    #VIDEO_PATH = "C:\\Users\\aimlc\\OneDrive\\Desktop\\Sowmesh\\footpath_seg_framework\\vlc-record-2024-09-23-10h50m15s-D05_20240325070810.mp4-.mp4"
+    VIDEO_PATH = r"D:\Sowmesh\yt_vids_2\vids\video_221.mp4"
     
     # Initialize system
     system = FootpathDetectionSystem(

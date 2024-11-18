@@ -10,3 +10,5 @@ custom_ultralytics/
 HitNRun/Inputs
 HitNRun/best_yolo.pt
 HitNRun/our_accident_best.pt
+HitNRun/Logs/
+HitNRun/Outputs/
