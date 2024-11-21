@@ -32,7 +32,8 @@ tracker_args = yaml_load(tracker_config_path)
 tracker_args = IterableSimpleNamespace(**tracker_args)
 
 # Open the video file
-video_path = "D:\\Sowmesh\\yt_vids_2\\vids\\video_252.mp4"
+# video_path = "D:\\Sowmesh\\yt_vids_2\\vids\\video_252.mp4"
+video_path = r"D:\Sowmesh\MulitpleObjectTracking\SampleVids\bombay_trafficShortened.mp4"
 cap = cv2.VideoCapture(video_path)
 
 # Get video properties
@@ -56,6 +57,21 @@ batch_size = 32
 raw_frame_queue = Queue(maxsize=120)  # Increase queue size
 detection_queue = Queue(maxsize=80)
 tracking_queue = Queue(maxsize=80)
+
+track_hist = {}
+last_time = {}
+
+# Queue to store expired objects
+expired_objects_queue = Queue(maxsize=100)
+
+log_file = "hit_and_run_log.txt"
+
+def log_hit_and_run(message):
+    """Log hit-and-run-related messages to a text file."""
+    with open(log_file, "a") as f:
+        f.write(message + "\n")
+   
+    print(message)
 
 # Function to read frames from the video
 def frame_reader():
@@ -112,6 +128,39 @@ def sahi_detector():
         
         detection_queue.put(batch_results)
 
+
+def update_tracking_history(tracked_objects):
+    global track_hist, last_time
+    current_time = time.time()
+    for obj_id, obj_data in tracked_objects.items():
+        if obj_id in track_hist:
+            track_hist[obj_id].append(obj_data)
+        else:
+            track_hist[obj_id] = [obj_data]
+        last_time[obj_id] = current_time
+        
+def manage_expired_objects():
+    while True:
+        current_time = time.time()
+        expired_ids = []
+        for obj_id, last_detected in list(last_time.items()):
+            if current_time - last_detected > 10:  # 10 seconds threshold
+                expired_ids.append(obj_id)
+
+        for obj_id in expired_ids:
+            # Add to expired queue and remove from dictionaries
+            expired_objects_queue.put((obj_id, track_hist[obj_id]))
+            log_hit_and_run(f"Expired object: {obj_id}")
+            
+            del track_hist[obj_id]
+            del last_time[obj_id]
+
+        time.sleep(1)  # Check every second to avoid busy looping
+        
+expired_objects_manager_thread = Thread(target=manage_expired_objects, daemon=True)
+expired_objects_manager_thread.start()
+
+
 # Function to perform tracking on a batch of detections
 @torch.no_grad()  # Disable gradient computation for inference
 def tracker_processor():
@@ -138,16 +187,35 @@ def tracker_processor():
             )
             
             det = results.boxes.cpu().numpy()
+            tracked_objects = {}
             if len(det):
                 tracks = tracker.update(det, frame)
                 if len(tracks):
                     idx = tracks[:, -1].astype(int)
                     results = results[idx]
                     results.update(boxes=torch.as_tensor(tracks[:, :-1], dtype=torch.float16).cuda(non_blocking=True))
+                    # Update tracking history
+                    for track in tracks:
+                        obj_id = int(track[-1])
+                        tracked_objects[obj_id] = track[:-1]
+                        
+            update_tracking_history(tracked_objects)  # Update the history in parallel
             
             batch_results.append(results)
         
         tracking_queue.put(batch_results)
+        
+def cleanup_remaining_objects():
+    global track_hist, last_time
+    current_time = time.time()
+    for obj_id in list(track_hist.keys()):
+        # Add all remaining tracked objects to the expired queue
+        expired_objects_queue.put((obj_id, track_hist[obj_id]))
+    
+    # Clear the dictionaries
+    track_hist.clear()
+    last_time.clear()
+
 
 # Start the pipeline threads
 frame_reader_thread = Thread(target=frame_reader)
@@ -176,6 +244,13 @@ while True:
 frame_reader_thread.join()
 sahi_detector_thread.join()
 tracker_processor_thread.join()
+expired_objects_manager_thread.join()
+
+cleanup_remaining_objects()
+
+while not expired_objects_queue.empty():
+    expired_object = expired_objects_queue.get()
+    log_hit_and_run(f"Expired object: {expired_object}")
 
 # Release resources
 cap.release()
